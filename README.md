@@ -131,23 +131,54 @@ The following examples can help you further understand the structure of the body
 | Green gradual, 100% speed | `61:27:1f:0f`          |
 | Blue gradual, 100% speed  | `61:28:01:0f`          |
 
-### Special Signature for AK001-ZJ21411
+### AK001-ZJ21411 Spider 8D RGBIC controller
 
-Firmware 11 has a very different signature and uses 23 bytes instead of 8 (or 9). Here are some parts I've been able to decipher:
+The AK001-ZJ21411 firmware `AA_35_20230919_ZG-BL` uses a framed TCP protocol for its RGBIC color updates. Captures from Surplife show this outer layout:
 
+```
+B0 B1 B2 B3 00 01 02 COUNTER LENGTH_H LENGTH_L PAYLOAD CHECKSUM
+```
 
-**b0b1b2b3000102** -- header, always the same  
-**34** -- counter, keeps ticking up  
-**000ee00100** -- filler ??  
-**b1** - white / **a1** - color  
-**000000** - white, HEX values for Hue / 2, Saturation , Value if color (ie **006464**)  
-**00** -- warm / **64** cool  
-**64** -- brightness for white  
-**0000140000** -- filler?  
-**24** -- checksum  
+`LENGTH_H:LENGTH_L` is the big-endian payload length. In the captured requests, the checksum is the sum of every preceding frame byte modulo 256. The sequence counter increments between captured requests; the CLI starts at `0` and increments within a process, and the Python class accepts an explicit counter seed for testing.
 
+### Static RGB and 20-slot segment updates
 
-| Header          | Counter | Filler       | Type  | White/Color HEX  | Warm/Cool | Brightness | Filler     | Checksum |
-| -------------- | -------- | ----------- | ----- | ---------------- | --------- | ---------- | ---------- | -------- |
-| `b0b1b2b3000102` | `34`   | `000ee00100` | `b1/a1` | `000000` / `006464` | `00/64`   | `64`       | `0000140000` | `24`      |
+An observed static-color payload starts with `E1 03 00 14 00 00 14`, followed by 20 four-byte records:
 
+```
+A1 HUE_HALF SATURATION VALUE
+```
+
+The captures for red, green and blue used hue-half values `00`, `3C` and `78`; `64` appeared as saturation, and `1B` as the captured value/brightness. The observed 20-slot command has an 87-byte payload and a 98-byte complete frame. These byte meanings are limited to the captured cases; other modes still need device validation.
+
+Set all 20 slots to one color:
+
+```
+python3 control.py -ip 192.168.2.2 -rgb 255,0,0
+```
+
+Override the encoded brightness/value from 0 to 100 percent:
+
+```
+python3 control.py -ip 192.168.2.2 -rgb 255,0,0 -brightness 27
+```
+
+Set distinct colors by supplying exactly 20 semicolon-separated `R,G,B` triplets to `-segments`. For example, a list can set one slot green, other active slots red, and unused slots black:
+
+```
+python3 control.py -ip 192.168.2.2 -segments '255,0,0;0,255,0;255,0,0;...'
+```
+
+The ellipsis above is explanatory; provide all 20 triplets in an actual command. Segment numbering/physical layout has not yet been mapped.
+
+### Captured effect and status limits
+
+The reporter's `Christmas 1` capture contains a working observed effect frame. It can be replayed with `-raw` by including the captured frame through its payload and omitting the final checksum byte, which this script adds:
+
+```
+python3 control.py -ip 192.168.2.2 -raw B0:B1:B2:B3:00:01:02:51:00:23:E1:01:00:64:03:00:01:64:50:00:A1:00:00:00:05:A1:00:64:64:A1:19:E4:64:A1:3B:E4:64:A1:66:E4:64:A1:85:64:64
+```
+
+This is a replay of one captured preset, not a general effect encoder. For this controller, `-status` returns the response as `status_raw` JSON rather than guessing the meanings of unconfirmed fields. White-mode commands are intentionally reported as unsupported until a white-mode capture is available.
+
+This repository is a standalone CLI/library; changes here do not by themselves add support to Home Assistant's separate `flux_led` integration. Hardware validation is still needed for the new encoders and for command counters on fresh connections.
