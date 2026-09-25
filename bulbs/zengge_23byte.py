@@ -10,6 +10,8 @@ class Zengge23Byte(Zengge):
     FRAME_HEADER = bytes.fromhex("B0 B1 B2 B3 00 01 02")
     SEGMENT_COUNT = 20
     RGB_SEGMENT_HEADER = bytes.fromhex("E1 03 00 14 00 00 14")
+    LEGACY_STATUS_REQUEST = bytes.fromhex("81 8A 8B 96")
+    LEGACY_STATUS_RESPONSE_LENGTH = 27
 
     def __init__(self, ip, counter=0):
         super().__init__(ip)
@@ -86,14 +88,40 @@ class Zengge23Byte(Zengge):
             response = response[10 : 10 + payload_length]
         return {"status_raw": response.hex()}
 
+    @staticmethod
+    def _recv_exact(connection, length):
+        chunks = []
+        remaining = length
+        while remaining:
+            chunk = connection.recv(remaining)
+            if not chunk:
+                raise ValueError("truncated AK001-ZJ21411 status response")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+    @classmethod
+    def read_status_response(cls, connection):
+        """Read either the observed 27-byte legacy reply or a framed reply."""
+        prefix = cls._recv_exact(connection, 2)
+        if prefix == cls.FRAME_HEADER[:2]:
+            header = prefix + cls._recv_exact(connection, 8)
+            if header[:7] != cls.FRAME_HEADER:
+                raise ValueError("invalid AK001-ZJ21411 response header")
+            payload_length = int.from_bytes(header[8:10], "big")
+            return header + cls._recv_exact(connection, payload_length + 1)
+        return prefix + cls._recv_exact(
+            connection, cls.LEGACY_STATUS_RESPONSE_LENGTH - len(prefix)
+        )
+
     def get_status(self):
-        """Query legacy status and expose the unknown reply without mis-decoding it."""
+        """Send the issue-reported raw query and preserve its unknown reply."""
         try:
             with socket.socket() as connection:
                 connection.settimeout(3)
                 connection.connect((self.ip, 5577))
-                connection.sendall(bytes(self.process_raw("81:8a:8b:96")))
-                response = connection.recv(1024)
+                connection.sendall(self.LEGACY_STATUS_REQUEST)
+                response = self.read_status_response(connection)
             status = self.parse_status_response(response)
             print(json.dumps(status))
             return [f"{byte:02x}" for byte in response]

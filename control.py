@@ -30,6 +30,25 @@ def parse_segment_colors(raw):
         colors.append(color)
     return colors
 
+def parse_counter(raw):
+    try:
+        counter = int(raw, 0)
+    except ValueError as error:
+        raise ValueError("counter must be an integer from 0 to 255") from error
+    if not 0 <= counter <= 255:
+        raise ValueError("counter must be from 0 to 255")
+    return counter
+
+def process_rgb_or_error(parser, bulb, rgb, brightness=None):
+    try:
+        if isinstance(bulb, Zengge23Byte):
+            return bulb.process_rgb(rgb, brightness=brightness)
+        if brightness is not None:
+            parser.error("-brightness is only supported for AK001-ZJ21411")
+        return bulb.process_rgb(rgb)
+    except ValueError as error:
+        parser.error(str(error))
+
 def process_white_or_error(bulb, white):
     try:
         return bulb.process_white(white)
@@ -49,6 +68,7 @@ if __name__ == '__main__':
     parser.add_argument("-rgb", help="accept comma separated rgb values; i.e. -rgb 100,155,75")
     parser.add_argument("-segments", help="set 20 segment colors as semicolon-separated R,G,B triplets")
     parser.add_argument("-brightness", type=int, help="override AK001-ZJ21411 brightness (0-100 percent) for -rgb/-segments")
+    parser.add_argument("-counter", type=parse_counter, help="set initial AK001-ZJ21411 frame counter (0-255, accepts values like 0x1D); default 0 is unverified")
     parser.add_argument("-white", help="accept value of white temp and brightness (0-255); i.e. -white 150, 255")
     parser.add_argument("-warm", help="accept value of warm white (0-255); i.e. -warm 150")
     parser.add_argument("-cool", help="accept value of cool white (0-255); i.e. -cool 150")
@@ -61,6 +81,13 @@ if __name__ == '__main__':
 
     if parsed_args.ip is None:
         bulb.print_error(None, 'Must provide IP.')
+
+    if parsed_args.counter is not None:
+        if not isinstance(bulb, Zengge23Byte):
+            parser.error("-counter is only supported for AK001-ZJ21411")
+        if not (parsed_args.rgb or parsed_args.segments) or parsed_args.raw:
+            parser.error("-counter requires -rgb or -segments, not -raw")
+        bulb.counter = parsed_args.counter
 
     if parsed_args.brightness is not None:
         if not (parsed_args.rgb or parsed_args.segments):
@@ -85,16 +112,13 @@ if __name__ == '__main__':
             bulb.print_error("-segments is only supported for AK001-ZJ21411")
         try:
             colors = parse_segment_colors(parsed_args.segments)
+            values = bulb.process_segments(colors, brightness=parsed_args.brightness)
         except ValueError as error:
             parser.error(str(error))
-        values = bulb.process_segments(colors, brightness=parsed_args.brightness)
     elif parsed_args.rgb:
-        if isinstance(bulb, Zengge23Byte):
-            values = bulb.process_rgb(parsed_args.rgb, brightness=parsed_args.brightness)
-        else:
-            if parsed_args.brightness is not None:
-                parser.error("-brightness is only supported for AK001-ZJ21411")
-            values = bulb.process_rgb(parsed_args.rgb)
+        values = process_rgb_or_error(
+            parser, bulb, parsed_args.rgb, brightness=parsed_args.brightness
+        )
     elif parsed_args.white:
         white = parsed_args.white.split(',')
         values = process_white_or_error(bulb, white)

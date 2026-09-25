@@ -1,7 +1,39 @@
+import io
 import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
-from control import parse_segment_colors
+from control import parse_counter, parse_segment_colors, process_rgb_or_error
 from bulbs.zengge_23byte import Zengge23Byte
+
+
+class ChunkedSocket:
+    def __init__(self, data, chunk_size):
+        self.data = data
+        self.chunk_size = chunk_size
+        self.sent = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def connect(self, address):
+        self.address = address
+
+    def sendall(self, data):
+        self.sent.append(data)
+
+    def recv(self, size):
+        if not self.data:
+            return b""
+        count = min(size, self.chunk_size, len(self.data))
+        chunk, self.data = self.data[:count], self.data[count:]
+        return chunk
 
 
 class Zengge23ByteProtocolTests(unittest.TestCase):
@@ -110,6 +142,63 @@ class Zengge23ByteProtocolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "exactly 20"):
             parse_segment_colors(raw)
+
+    def test_counter_parser_accepts_hex_and_decimal_bytes(self):
+        self.assertEqual(parse_counter("0x1d"), 0x1D)
+        self.assertEqual(parse_counter("29"), 29)
+
+    def test_counter_parser_rejects_values_outside_byte_range(self):
+        with self.assertRaisesRegex(ValueError, "0 to 255"):
+            parse_counter("256")
+
+    def test_invalid_cli_rgb_is_reported_as_argument_error(self):
+        class ParserStub:
+            def error(self, message):
+                raise RuntimeError(message)
+
+        with self.assertRaisesRegex(RuntimeError, "between 0 and 255"):
+            process_rgb_or_error(
+                ParserStub(), Zengge23Byte("127.0.0.1"), "256,0,0", None
+            )
+
+    def test_status_query_uses_reported_legacy_request_bytes(self):
+        self.assertEqual(
+            Zengge23Byte.LEGACY_STATUS_REQUEST,
+            bytes.fromhex("81 8A 8B 96"),
+        )
+
+    def test_get_status_sends_reported_unframed_request(self):
+        response = bytes.fromhex(
+            "EA 81 02 00 AA 09 23 25 FF 64 F0 B4 64 64 00 00 01 "
+            "00 0E 00 00 00 20 01 00 00 01"
+        )
+        connection = ChunkedSocket(response, 4)
+
+        with patch("bulbs.zengge_23byte.socket.socket", return_value=connection):
+            with redirect_stdout(io.StringIO()):
+                Zengge23Byte("127.0.0.1").get_status()
+
+        self.assertEqual(connection.sent, [bytes.fromhex("81 8A 8B 96")])
+
+    def test_status_response_reader_handles_fragmented_legacy_reply(self):
+        response = bytes.fromhex(
+            "EA 81 02 00 AA 09 23 25 FF 64 F0 B4 64 64 00 00 01 "
+            "00 0E 00 00 00 20 01 00 00 01"
+        )
+
+        actual = Zengge23Byte.read_status_response(ChunkedSocket(response, 3))
+
+        self.assertEqual(actual, response)
+
+    def test_status_response_reader_handles_fragmented_framed_reply(self):
+        response = bytes.fromhex(
+            "B0 B1 B2 B3 00 01 02 1B 00 1B EA 81 01 00 AA 09 23 24 "
+            "01 50 F0 B4 64 1B 00 00 01 00 0E 00 00 00 20 01 00 00 01 FF"
+        )
+
+        actual = Zengge23Byte.read_status_response(ChunkedSocket(response, 5))
+
+        self.assertEqual(actual, response)
 
     def test_framed_status_response_returns_opaque_status_payload(self):
         response = bytes.fromhex(

@@ -139,7 +139,7 @@ The AK001-ZJ21411 firmware `AA_35_20230919_ZG-BL` uses a framed TCP protocol for
 B0 B1 B2 B3 00 01 02 COUNTER LENGTH_H LENGTH_L PAYLOAD CHECKSUM
 ```
 
-`LENGTH_H:LENGTH_L` is the big-endian payload length. In the captured requests, the checksum is the sum of every preceding frame byte modulo 256. The sequence counter increments between captured requests; the CLI starts at `0` and increments within a process, and the Python class accepts an explicit counter seed for testing.
+`LENGTH_H:LENGTH_L` is the big-endian payload length. In the captured requests, the checksum is the sum of every preceding frame byte modulo 256. The sequence counter increments between captured requests. The CLI starts at `0`, but acceptance of that seed on a fresh connection is unverified; use `-counter 0x1D` (or a decimal value) to try a captured counter seed.
 
 ### Static RGB and 20-slot segment updates
 
@@ -173,7 +173,7 @@ The ellipsis above is explanatory; provide all 20 triplets in an actual command.
 
 ### Captured effect and status limits
 
-The reporter's `Christmas 1` capture contains a working observed effect frame. It can be replayed with `-raw` by including the captured frame through its payload and omitting the final checksum byte, which this script adds:
+The reporter's `Christmas 1` capture contains an effect frame observed in Surplife traffic. It can be supplied to `-raw` as shown below, with the final checksum omitted because this script adds it; replaying this frame from the CLI on the physical controller has not yet been verified:
 
 ```
 python3 control.py -ip 192.168.2.2 -raw B0:B1:B2:B3:00:01:02:51:00:23:E1:01:00:64:03:00:01:64:50:00:A1:00:00:00:05:A1:00:64:64:A1:19:E4:64:A1:3B:E4:64:A1:66:E4:64:A1:85:64:64
@@ -181,4 +181,4 @@ python3 control.py -ip 192.168.2.2 -raw B0:B1:B2:B3:00:01:02:51:00:23:E1:01:00:6
 
 This is a replay of one captured preset, not a general effect encoder. For this controller, `-status` returns the response as `status_raw` JSON rather than guessing the meanings of unconfirmed fields. White-mode commands are intentionally reported as unsupported until a white-mode capture is available.
 
-This repository is a standalone CLI/library; changes here do not by themselves add support to Home Assistant's separate `flux_led` integration. Hardware validation is still needed for the new encoders and for command counters on fresh connections.
+This repository is a standalone CLI/library; changes here do not by themselves add support to Home Assistant's separate `flux_led` integration. The upstream issue reports the legacy `-status` request as the unframed bytes `81 8A 8B 96` with a 27-byte reply; Surplife captures also contain a distinct framed status exchange, which this CLI does not use to maintain a synchronized session. Hardware validation is still needed for the new encoders and for command counters on fresh connections.
